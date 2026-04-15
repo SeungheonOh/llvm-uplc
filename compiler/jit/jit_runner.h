@@ -75,13 +75,6 @@ public:
 private:
     void register_runtime_symbols();
 
-    /* Wrap a pre-optimized module in a fresh JITDylib + ThreadSafeModule
-     * (using the runner's shared context) and hand it to LLJIT. The
-     * module MUST have been built in the runner's context — otherwise
-     * LLJIT will crash materializing it. Only add_pipeline uses this. */
-    JitProgram add_module(std::unique_ptr<llvm::Module> mod,
-                          const std::string& unique_id);
-
     std::unique_ptr<llvm::orc::LLJIT>    jit_;
     llvm::orc::ThreadSafeContext         ts_ctx_;
     std::unique_ptr<llvm::TargetMachine> tm_;

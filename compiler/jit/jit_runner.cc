@@ -9,11 +9,17 @@
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+
+#include <llvm/ADT/SmallVector.h>
 
 #include "compiler/jit/codegen_pipeline.h"
 #include "compiler/jit/runtime_bitcode.h"
@@ -85,23 +91,42 @@ JitRunner::JitRunner()
      *      its dso_local bit set (otherwise the back end goes through
      *      :got: regardless of relocation or code model).
      *
-     * Conditions (1) and (2) are set here on the JIT's internal
-     * TargetMachineBuilder. Condition (3) is enforced by a post-link
-     * walk over the merged module in compile_pipeline_to_optimized_module
-     * — every host-resident symbol we register via absoluteSymbols lives
-     * in the same process image as the JIT code, so dso_local is
-     * truthful, and with the three conditions together the back end
-     * lowers every external reference to a MOVZ/MOVK/MOVK/MOVK absolute
-     * 64-bit address that JITLink can patch regardless of range.
+     * Conditions (1) and (2) are set here on a single TargetMachine
+     * that we own and drive both the optimizer AND the object-file
+     * codegen with. Condition (3) is enforced by mark_dso_local_for_jit
+     * running both BEFORE and AFTER the optimizer in
+     * compile_pipeline_to_optimized_module (the optimizer can
+     * internalize or add new external decls and we want to catch both).
+     *
+     * We bypass LLJIT's built-in IRCompileLayer entirely and hand it
+     * pre-compiled object buffers via addObjectFile — see
+     * add_pipeline below. Going through addObjectFile keeps LLJIT's
+     * internal JITTargetMachineBuilder out of the picture so there's
+     * exactly one TargetMachine (ours) governing every relocation kind
+     * the JIT linker ever sees. This also sidesteps LLVM-version-
+     * specific variance in how LLJITBuilder::setJITTargetMachineBuilder
+     * is propagated to the internal compile function.
      *
      * Slightly larger code per external reference, but that's the right
      * trade-off here — we're JIT'ing for correctness, not for code
      * density, and the hot path is inside user code / runtime bitcode
      * that's already resolved locally within the JIT slab. */
-    if (jtmb->getTargetTriple().isAArch64()) {
+    const bool is_aarch64 = jtmb->getTargetTriple().isAArch64();
+    if (is_aarch64) {
         jtmb->setCodeModel(llvm::CodeModel::Large);
         jtmb->setRelocationModel(llvm::Reloc::Static);
     }
+
+    /* Build the single TargetMachine we'll use for everything. We
+     * create it before handing the builder to LLJITBuilder (which
+     * consumes it) so the optimizer and our own object-file codegen
+     * share identical target settings — no divergence possible. */
+    auto tm_or_err = jtmb->createTargetMachine();
+    if (!tm_or_err) {
+        throw std::runtime_error("createTargetMachine: " +
+                                 llvm_err_str(tm_or_err.takeError()));
+    }
+    tm_ = std::move(*tm_or_err);
 
     auto j = llvm::orc::LLJITBuilder()
                  .setJITTargetMachineBuilder(std::move(*jtmb))
@@ -113,16 +138,6 @@ JitRunner::JitRunner()
     jit_ = std::move(*j);
 
     register_runtime_symbols();
-
-    /* One host TargetMachine for the lifetime of the runner — rebuilding
-     * it per script showed up as a measurable chunk of per-fixture cost
-     * in uplcbench profiles and there's no reason for it to change
-     * between programs. */
-    tm_ = make_host_target_machine("jit");
-    if (!tm_) {
-        throw std::runtime_error(
-            "JitRunner: failed to build host TargetMachine");
-    }
 
     /* Parse + mark the embedded runtime bitcode ONCE into the shared
      * context. Every add_pipeline clones this instead of re-parsing the
@@ -269,8 +284,51 @@ void JitRunner::register_runtime_symbols() {
     jit_->getMainJITDylib().addGenerator(std::move(*dl_or_err));
 }
 
-JitProgram JitRunner::add_module(std::unique_ptr<llvm::Module> mod,
-                                 const std::string& unique_id) {
+/*
+ * Compile `mod` through the backend codegen pipeline into an in-memory
+ * ELF/Mach-O object buffer using our own TargetMachine. This is what
+ * lets us keep LLJIT's internal IRCompileLayer out of the JIT path —
+ * on aarch64 the whole fix depends on knowing exactly which code /
+ * relocation model is used for the final machine-code emission, and
+ * funnelling everything through one TargetMachine that we own is the
+ * only reliable way to get that guarantee across LLVM versions.
+ */
+static std::unique_ptr<llvm::MemoryBuffer>
+emit_object_to_buffer(llvm::Module& mod, llvm::TargetMachine& tm) {
+    llvm::SmallVector<char, 0> buf;
+    llvm::raw_svector_ostream os(buf);
+
+    llvm::legacy::PassManager pm;
+    if (tm.addPassesToEmitFile(pm, os, nullptr,
+                                llvm::CodeGenFileType::ObjectFile)) {
+        throw std::runtime_error(
+            "JitRunner: target cannot emit object files");
+    }
+    pm.run(mod);
+
+    return std::make_unique<llvm::SmallVectorMemoryBuffer>(
+        std::move(buf), /*BufferName=*/"jit-module",
+        /*RequiresNullTerminator=*/false);
+}
+
+JitProgram JitRunner::add_pipeline(const Pipeline& p,
+                                   const std::string& unique_id) {
+    /* Codegen + runtime-bitcode link + optimization happen inside the
+     * shared context under ThreadSafeContext::withContextDo, which
+     * holds the recursive mutex guarding the context. This is what
+     * lets future multi-threaded JitRunner use be safe; in the current
+     * single-threaded consumers (uplcbench, conformance, uplcc run)
+     * the lock is uncontended. The object-file emission also runs
+     * under the lock because legacy PassManager::run mutates the
+     * module. */
+    std::unique_ptr<llvm::MemoryBuffer> obj_buf;
+    ts_ctx_.withContextDo([&](llvm::LLVMContext* ctx) {
+        auto mod = compile_pipeline_to_optimized_module(
+            *ctx, unique_id, p, tm_.get(), runtime_cache_.get(),
+            OptPreset::FastJIT);
+        obj_buf = emit_object_to_buffer(*mod, *tm_);
+    });
+
     /* Each program gets its own JITDylib so `program_entry` doesn't
      * collide across multiple add_pipeline calls (used by uplcbench). */
     std::string dylib_name = "u" + std::to_string(next_dylib_id_++) + "_" + unique_id;
@@ -282,13 +340,8 @@ JitProgram JitRunner::add_module(std::unique_ptr<llvm::Module> mod,
     dy->addToLinkOrder(jit_->getMainJITDylib(),
         llvm::orc::JITDylibLookupFlags::MatchExportedSymbolsOnly);
 
-    /* TSM takes a COPY of ts_ctx_ — the State behind it is a shared_ptr,
-     * so each loaded module keeps the context alive until its dylib is
-     * removed. The module was built inside this same context under the
-     * withContextDo lock in add_pipeline. */
-    llvm::orc::ThreadSafeModule tsm(std::move(mod), ts_ctx_);
-    if (auto err = jit_->addIRModule(*dy, std::move(tsm))) {
-        throw std::runtime_error("addIRModule(" + dylib_name + ") failed: " +
+    if (auto err = jit_->addObjectFile(*dy, std::move(obj_buf))) {
+        throw std::runtime_error("addObjectFile(" + dylib_name + ") failed: " +
                                  llvm_err_str(std::move(err)));
     }
 
@@ -298,23 +351,6 @@ JitProgram JitRunner::add_module(std::unique_ptr<llvm::Module> mod,
                                  llvm_err_str(sym.takeError()));
     }
     return JitProgram{sym->toPtr<uplc_program_entry>(), &*dy};
-}
-
-JitProgram JitRunner::add_pipeline(const Pipeline& p,
-                                   const std::string& unique_id) {
-    /* Codegen + runtime-bitcode link + O3 happen inside the shared
-     * context under ThreadSafeContext::withContextDo, which holds the
-     * recursive mutex guarding the context. This is what lets future
-     * multi-threaded JitRunner use be safe; in the current
-     * single-threaded consumers (uplcbench, conformance, uplcc run)
-     * the lock is uncontended. */
-    std::unique_ptr<llvm::Module> mod;
-    ts_ctx_.withContextDo([&](llvm::LLVMContext* ctx) {
-        mod = compile_pipeline_to_optimized_module(
-            *ctx, unique_id, p, tm_.get(), runtime_cache_.get(),
-            OptPreset::FastJIT);
-    });
-    return add_module(std::move(mod), unique_id);
 }
 
 void JitRunner::remove(llvm::orc::JITDylib& dy) {

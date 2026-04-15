@@ -309,10 +309,25 @@ compile_pipeline_to_optimized_module(llvm::LLVMContext&   ctx,
      * :got: (an ADRP Page21 fixup) no matter what code / relocation
      * model the TargetMachine is configured for — see the recipe
      * comment on make_host_target_machine. No-op on other targets. */
+    /* Pre-optimize dso_local walk — gives the optimizer a target-
+     * consistent starting point so target-aware cost models don't
+     * mis-classify references. */
     mark_dso_local_for_jit(*mod);
 
     optimize_module(*mod, tm, preset);
     UPLC_TIME_STAMP("optimize");
+
+    /* Post-optimize dso_local walk — the optimizer can introduce new
+     * external declarations (libcalls emitted by the vectorizer, the
+     * bigint lowering, the memory-ops pass, etc.) and can also
+     * internalize / privatize symbols that were pre-existing. Running
+     * the walk a second time guarantees that every external reference
+     * reaching the back end is flagged dso_local so the aarch64 code
+     * generator doesn't fall back to a GOT indirection (and the
+     * associated Page21 fixup). See the recipe comment on
+     * mark_dso_local_for_jit above. */
+    mark_dso_local_for_jit(*mod);
+
     return mod;
 }
 
