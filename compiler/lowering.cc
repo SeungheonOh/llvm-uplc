@@ -1,5 +1,6 @@
 #include "compiler/lowering.h"
 
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <string>

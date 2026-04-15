@@ -1,0 +1,58 @@
+# Build outputs
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+
+# CMake artifacts anywhere
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+
+/benchmarks/
+
+# Object / static / dynamic libraries (should normally live under build/)
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# LLVM IR and bitcode dumps
+*.ll
+*.bc
+
+# macOS junk
+.DS_Store
+._*
+
+# Editor / IDE state
+.vscode/
+.idea/
+.cache/
+*.swp
+*.swo
+*~
+
+# Python bytecode (scripts/, tooling)
+__pycache__/
+*.pyc
+
+# Core dumps / crash artifacts
+core
+core.*
+*.dSYM/
+
+# Repo-root scratch fixtures and ad-hoc compiled binaries.
+# Real fixtures live under benchmarks/, tests/, conformance/, etc.;
+# these anchored patterns only hit the repo root.
+/*.uplc
+/*.uplcx
+/*.flat
+/coop1
+/simple

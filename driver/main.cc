@@ -11,6 +11,7 @@
 // .cbor → CBOR-wrapped flat, anything else → UPLC text.  Each arg is
 // evaluated through the CEK interpreter to normal form before application.
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

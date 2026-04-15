@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include <gmp.h>

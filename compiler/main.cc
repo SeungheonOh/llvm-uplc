@@ -11,6 +11,8 @@
 //   uplcc emit-ir FILE           emit LLVM IR for FILE to stdout
 //   uplcc emit-obj FILE -o OUT   compile FILE to a native object file
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>

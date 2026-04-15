@@ -1,6 +1,8 @@
 #include "compiler/ast/arena.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <new>

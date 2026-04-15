@@ -1,5 +1,7 @@
 #include "compiler/jit/codegen_pipeline.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <sstream>

@@ -1,5 +1,6 @@
 #include "compiler/ast/term.h"
 
+#include <cstdint>
 #include <cstring>
 
 namespace uplc {

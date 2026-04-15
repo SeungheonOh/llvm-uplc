@@ -1,5 +1,7 @@
 #include "compiler/frontend/cbor_unwrap.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 

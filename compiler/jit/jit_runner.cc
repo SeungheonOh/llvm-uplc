@@ -1,5 +1,6 @@
 #include "compiler/jit/jit_runner.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 

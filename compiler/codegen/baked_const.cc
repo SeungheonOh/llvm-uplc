@@ -1,5 +1,7 @@
 #include "compiler/codegen/baked_const.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 

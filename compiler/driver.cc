@@ -1,5 +1,7 @@
 #include "compiler/driver.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "compiler/ast/arena.h"

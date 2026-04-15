@@ -13,6 +13,7 @@
 // Named-form variables are one-indexed de Bruijn after name_to_debruijn; the
 // comments in each fixture show the resulting indices explicitly.
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
