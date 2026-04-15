@@ -37,6 +37,8 @@
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -187,43 +189,7 @@ std::unique_ptr<llvm::TargetMachine> make_host_target_machine(const char* who) {
 
     llvm::TargetOptions opts;
     auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-
-    /* Code model selection.
-     *
-     * On AArch64 we force CodeModel::Large so that every reference to a
-     * global symbol is lowered to a MOVZ/MOVK/MOVK/MOVK absolute 64-bit
-     * address instead of the default ADRP + ADD pair. The reason is the
-     * in-process JIT path:
-     *
-     *   - `uplcbench` / `uplcc run` JIT-compile the user program in
-     *     memory and register runtime symbols (UPLC_BUILTIN_META, the
-     *     uplcrt_* ABI surface, per-builtin impls) at their host-binary
-     *     addresses via orc::absoluteSymbols.
-     *   - `uplcr` loads .uplcx object files emitted by `uplcc emit-obj`
-     *     into the same LLJIT and resolves the same runtime symbols the
-     *     same way.
-     *   - On Linux aarch64 with PIE the host binary lives in the
-     *     0xaaaa_xxxx range while JITLink's slab allocator hands out
-     *     executable pages in the 0xffff_xxxx range — a ~22 GB gap.
-     *     Page21 (ADRP) fixups only reach ±4 GB, so every reference
-     *     from JIT-materialised code into a host-resident symbol fails
-     *     with "relocation target is out of range of Page21 fixup".
-     *
-     * Large code model sidesteps the range limit entirely. The cost is
-     * a few extra instructions per external reference in the emitted
-     * code — a fine trade for a correctness fix on a path that's
-     * already dominated by optimisation time, and immaterial for
-     * emit-exe where the binary is only compiled once.
-     *
-     * On x86_64 and other hosts we keep the default (Small) code model:
-     * those architectures either have longer PC-relative reach or let
-     * the linker synthesise stubs, and Large there would be a pure
-     * code-size regression with no correctness upside. */
     auto cm = std::optional<llvm::CodeModel::Model>();
-    if (triple.isAArch64()) {
-        cm = llvm::CodeModel::Large;
-    }
-
     std::unique_ptr<llvm::TargetMachine> tm(target->createTargetMachine(
         triple,
         llvm::sys::getHostCPUName(),
@@ -237,6 +203,50 @@ std::unique_ptr<llvm::TargetMachine> make_host_target_machine(const char* who) {
         return nullptr;
     }
     return tm;
+}
+
+// ---------------------------------------------------------------------------
+// aarch64 dso_local marking
+// ---------------------------------------------------------------------------
+
+/*
+ * Mark every GlobalValue in the module as dso_local when the target is
+ * aarch64. This is condition (3) of the aarch64 MOVZ/MOVK lowering
+ * recipe documented on make_host_target_machine — without it the back
+ * end routes every external reference through the GOT (an ADRP/Page21
+ * fixup) regardless of the TargetMachine's code and relocation models,
+ * which is exactly the out-of-range failure we're trying to avoid.
+ *
+ * This is safe for every consumer of compile_pipeline_to_optimized_module:
+ *
+ *   - `uplcc run` / `uplcbench` / tests/conformance/jit_conformance_test:
+ *     the emitted code is loaded into an in-process LLJIT where every
+ *     symbol resolves to an address in the same process image, so
+ *     dso_local is factually correct.
+ *   - `uplcc emit-obj` / `uplcc emit-exe`: the resulting .o file is
+ *     either loaded by uplcr into an in-process LLJIT (same argument
+ *     as above) or statically linked into a fully-self-contained
+ *     executable where every external symbol is satisfied by
+ *     libuplcrt.a at static link time — again, a single DSO at
+ *     runtime, so dso_local is correct.
+ *
+ * We skip the walk on non-aarch64 targets so x86_64 (which does not
+ * need this recipe and where marking everything dso_local would just
+ * be a harmless but gratuitous IR perturbation) stays on the default
+ * code path.
+ */
+static void mark_dso_local_for_jit(llvm::Module& mod) {
+    if (!llvm::Triple(mod.getTargetTriple()).isAArch64()) return;
+
+    for (llvm::GlobalVariable& g : mod.globals()) {
+        g.setDSOLocal(true);
+    }
+    for (llvm::Function& f : mod.functions()) {
+        f.setDSOLocal(true);
+    }
+    for (llvm::GlobalAlias& a : mod.aliases()) {
+        a.setDSOLocal(true);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +301,15 @@ compile_pipeline_to_optimized_module(llvm::LLVMContext&   ctx,
         }
         UPLC_TIME_STAMP("link runtime bc");
     }
+
+    /* aarch64 Page21 avoidance, step (3): after the runtime bitcode
+     * link has brought in every external declaration the optimizer and
+     * back end will see, walk the merged module and flip dso_local on.
+     * Without this the back end routes every external reference through
+     * :got: (an ADRP Page21 fixup) no matter what code / relocation
+     * model the TargetMachine is configured for — see the recipe
+     * comment on make_host_target_machine. No-op on other targets. */
+    mark_dso_local_for_jit(*mod);
 
     optimize_module(*mod, tm, preset);
     UPLC_TIME_STAMP("optimize");

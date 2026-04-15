@@ -63,9 +63,9 @@ JitRunner::JitRunner()
                                  llvm_err_str(jtmb.takeError()));
     }
 
-    /* On AArch64 the default (Small) code model emits ADRP + ADD
-     * sequences for references to global symbols. Page21 fixups have
-     * only ±4 GB of reach, but on Linux aarch64 with PIE the host
+    /* On aarch64 the default code model emits ADRP + ADD / ADRP + GOT
+     * LDR sequences for references to global symbols. Page21 fixups
+     * have only ±4 GB of reach, but on Linux aarch64 with PIE the host
      * binary sits in the 0xaaaa_xxxx range while JITLink's slab
      * allocator hands out executable pages in the 0xffff_xxxx range —
      * a ~22 GB gap. Every reference from JIT-emitted code into a host-
@@ -73,16 +73,34 @@ JitRunner::JitRunner()
      * uplcrt_*, the per-builtin impls, …) then fails materialization
      * with "relocation target is out of range of Page21 fixup".
      *
-     * Switching the JIT's codegen to CodeModel::Large makes the back
-     * end emit MOVZ/MOVK/MOVK/MOVK sequences that carry a full 64-bit
-     * absolute address, which JITLink can patch regardless of how far
-     * the target symbol happens to be. Slightly larger code per
-     * external reference, but that's the right trade-off here — we're
-     * JIT'ing for correctness, not for code density, and the hot path
-     * is inside user code / runtime bitcode that's already resolved
-     * locally within the JIT slab. */
+     * Getting the aarch64 back end to stop emitting ADRP for externals
+     * requires ALL THREE of the following conditions in combination —
+     * relaxing any one of them puts the ADRP back:
+     *
+     *   1. Relocation model = Static (PIC forces a GOT indirection
+     *      even when the symbol is dso_local).
+     *   2. Code model = Large (the Small / Tiny models hard-code
+     *      ADRP + ADD for direct references).
+     *   3. Every external GlobalValue referenced from the module has
+     *      its dso_local bit set (otherwise the back end goes through
+     *      :got: regardless of relocation or code model).
+     *
+     * Conditions (1) and (2) are set here on the JIT's internal
+     * TargetMachineBuilder. Condition (3) is enforced by a post-link
+     * walk over the merged module in compile_pipeline_to_optimized_module
+     * — every host-resident symbol we register via absoluteSymbols lives
+     * in the same process image as the JIT code, so dso_local is
+     * truthful, and with the three conditions together the back end
+     * lowers every external reference to a MOVZ/MOVK/MOVK/MOVK absolute
+     * 64-bit address that JITLink can patch regardless of range.
+     *
+     * Slightly larger code per external reference, but that's the right
+     * trade-off here — we're JIT'ing for correctness, not for code
+     * density, and the hot path is inside user code / runtime bitcode
+     * that's already resolved locally within the JIT slab. */
     if (jtmb->getTargetTriple().isAArch64()) {
         jtmb->setCodeModel(llvm::CodeModel::Large);
+        jtmb->setRelocationModel(llvm::Reloc::Static);
     }
 
     auto j = llvm::orc::LLJITBuilder()
