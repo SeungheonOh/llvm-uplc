@@ -6,8 +6,10 @@
 
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/TargetSelect.h>
@@ -55,7 +57,37 @@ JitRunner::JitRunner()
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
 
-    auto j = llvm::orc::LLJITBuilder().create();
+    auto jtmb = llvm::orc::JITTargetMachineBuilder::detectHost();
+    if (!jtmb) {
+        throw std::runtime_error("JITTargetMachineBuilder::detectHost: " +
+                                 llvm_err_str(jtmb.takeError()));
+    }
+
+    /* On AArch64 the default (Small) code model emits ADRP + ADD
+     * sequences for references to global symbols. Page21 fixups have
+     * only ±4 GB of reach, but on Linux aarch64 with PIE the host
+     * binary sits in the 0xaaaa_xxxx range while JITLink's slab
+     * allocator hands out executable pages in the 0xffff_xxxx range —
+     * a ~22 GB gap. Every reference from JIT-emitted code into a host-
+     * resident symbol we registered via absoluteSymbols (UPLC_BUILTIN_META,
+     * uplcrt_*, the per-builtin impls, …) then fails materialization
+     * with "relocation target is out of range of Page21 fixup".
+     *
+     * Switching the JIT's codegen to CodeModel::Large makes the back
+     * end emit MOVZ/MOVK/MOVK/MOVK sequences that carry a full 64-bit
+     * absolute address, which JITLink can patch regardless of how far
+     * the target symbol happens to be. Slightly larger code per
+     * external reference, but that's the right trade-off here — we're
+     * JIT'ing for correctness, not for code density, and the hot path
+     * is inside user code / runtime bitcode that's already resolved
+     * locally within the JIT slab. */
+    if (jtmb->getTargetTriple().isAArch64()) {
+        jtmb->setCodeModel(llvm::CodeModel::Large);
+    }
+
+    auto j = llvm::orc::LLJITBuilder()
+                 .setJITTargetMachineBuilder(std::move(*jtmb))
+                 .create();
     if (!j) {
         throw std::runtime_error("LLJIT init failed: " +
                                  llvm_err_str(j.takeError()));

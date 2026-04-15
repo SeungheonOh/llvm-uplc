@@ -187,7 +187,43 @@ std::unique_ptr<llvm::TargetMachine> make_host_target_machine(const char* who) {
 
     llvm::TargetOptions opts;
     auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
+
+    /* Code model selection.
+     *
+     * On AArch64 we force CodeModel::Large so that every reference to a
+     * global symbol is lowered to a MOVZ/MOVK/MOVK/MOVK absolute 64-bit
+     * address instead of the default ADRP + ADD pair. The reason is the
+     * in-process JIT path:
+     *
+     *   - `uplcbench` / `uplcc run` JIT-compile the user program in
+     *     memory and register runtime symbols (UPLC_BUILTIN_META, the
+     *     uplcrt_* ABI surface, per-builtin impls) at their host-binary
+     *     addresses via orc::absoluteSymbols.
+     *   - `uplcr` loads .uplcx object files emitted by `uplcc emit-obj`
+     *     into the same LLJIT and resolves the same runtime symbols the
+     *     same way.
+     *   - On Linux aarch64 with PIE the host binary lives in the
+     *     0xaaaa_xxxx range while JITLink's slab allocator hands out
+     *     executable pages in the 0xffff_xxxx range — a ~22 GB gap.
+     *     Page21 (ADRP) fixups only reach ±4 GB, so every reference
+     *     from JIT-materialised code into a host-resident symbol fails
+     *     with "relocation target is out of range of Page21 fixup".
+     *
+     * Large code model sidesteps the range limit entirely. The cost is
+     * a few extra instructions per external reference in the emitted
+     * code — a fine trade for a correctness fix on a path that's
+     * already dominated by optimisation time, and immaterial for
+     * emit-exe where the binary is only compiled once.
+     *
+     * On x86_64 and other hosts we keep the default (Small) code model:
+     * those architectures either have longer PC-relative reach or let
+     * the linker synthesise stubs, and Large there would be a pure
+     * code-size regression with no correctness upside. */
     auto cm = std::optional<llvm::CodeModel::Model>();
+    if (triple.isAArch64()) {
+        cm = llvm::CodeModel::Large;
+    }
+
     std::unique_ptr<llvm::TargetMachine> tm(target->createTargetMachine(
         triple,
         llvm::sys::getHostCPUName(),
