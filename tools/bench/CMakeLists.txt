@@ -8,6 +8,7 @@ target_link_libraries(uplcbench
         uplc::frontend
         uplc::codegen
         uplc::runtime
+        uplc::lower_bc
         uplc::compile_options
         LLVM
 )

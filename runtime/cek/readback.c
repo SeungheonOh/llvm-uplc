@@ -1,12 +1,14 @@
-#include "runtime/readback.h"
+#include "runtime/cek/readback.h"
 
 #include <stdalign.h>
 #include <stdint.h>
 
-#include "runtime/builtin_state.h"
+#include "runtime/bytecode/closure.h"
+#include "runtime/core/builtin_state.h"
 #include "runtime/cek/closure.h"
 #include "runtime/cek/env.h"
-#include "runtime/value.h"
+#include "runtime/core/value.h"
+#include "uplc/bytecode.h"
 
 /*
  * Value → rterm readback, including faithful closure readback via env
@@ -107,6 +109,46 @@ uplc_rterm* uplcrt_readback_close(uplc_arena* arena, uplc_rterm* body,
     return substitute(arena, body, arr, len, initial_depth);
 }
 
+/* Readback helper for bytecode-VM closures (subtag UPLC_VLAM_BYTECODE).
+ *
+ * Unlike the CEK's cons-list env, a bytecode closure stores only the
+ * free vars its body actually references, in a flat array, plus a
+ * parallel array of "outer deBruijn index for each upval slot" that the
+ * lowerer produces. We reconstruct a dense env array — large enough to
+ * cover the maximum deBruijn the body references — filling unreferenced
+ * slots with a placeholder value (never read by substitute). Then we
+ * reuse the same `substitute` the CEK path uses. */
+uplc_rterm* uplcrt_readback_bc_closure(uplc_arena* arena, uplc_value v,
+                                       uint32_t initial_depth) {
+    uplc_bc_closure*   c  = uplc_bc_closure_of(v);
+    const uplc_bc_fn*  fn = c->fn;
+    if (fn == NULL || fn->body_rterm == NULL) {
+        return uplc_rterm_error(arena);
+    }
+
+    uint32_t env_len = 0;
+    for (uint32_t i = 0; i < fn->n_upvals; ++i) {
+        uint32_t d = fn->upval_outer_db[i];
+        if (d + 1u > env_len) env_len = d + 1u;
+    }
+
+    uplc_value* env_arr = NULL;
+    if (env_len > 0) {
+        env_arr = (uplc_value*)uplc_arena_alloc(
+            arena, sizeof(uplc_value) * env_len, alignof(uplc_value));
+        /* Placeholder for slots the body doesn't reference. `substitute`
+         * only touches env_arr[i] when the body contains a matching Var,
+         * so the placeholder is never read for well-formed programs. */
+        uplc_value placeholder = uplc_make_int_inline(0);
+        for (uint32_t i = 0; i < env_len; ++i) env_arr[i] = placeholder;
+        for (uint32_t i = 0; i < fn->n_upvals; ++i) {
+            env_arr[fn->upval_outer_db[i]] = c->upvals[i];
+        }
+    }
+    return substitute(arena, (uplc_rterm*)fn->body_rterm,
+                      env_arr, env_len, initial_depth);
+}
+
 uplc_rterm* uplcrt_readback(uplc_arena* arena, uplc_value v) {
     switch ((uplc_value_tag)v.tag) {
         case UPLC_V_CON: {
@@ -147,21 +189,29 @@ uplc_rterm* uplcrt_readback(uplc_arena* arena, uplc_value v) {
             return t;
         }
         case UPLC_V_LAM: {
-            if (v.subtag != UPLC_VLAM_INTERP) {
-                /* Compiled-mode closure — not walkable as a term. */
-                return uplc_rterm_lambda(arena, uplc_rterm_error(arena));
+            if (v.subtag == UPLC_VLAM_INTERP) {
+                uplc_interp_closure* c = uplc_closure_of(v);
+                return uplc_rterm_lambda(
+                    arena, uplcrt_readback_close(arena, c->body, c->env, 1));
             }
-            uplc_interp_closure* c = uplc_closure_of(v);
-            return uplc_rterm_lambda(
-                arena, uplcrt_readback_close(arena, c->body, c->env, 1));
+            if (v.subtag == UPLC_VLAM_BYTECODE) {
+                return uplc_rterm_lambda(
+                    arena, uplcrt_readback_bc_closure(arena, v, 1));
+            }
+            /* Compiled-mode closure — not walkable as a term. */
+            return uplc_rterm_lambda(arena, uplc_rterm_error(arena));
         }
         case UPLC_V_DELAY: {
-            if (v.subtag != UPLC_VLAM_INTERP) {
-                return uplc_rterm_delay(arena, uplc_rterm_error(arena));
+            if (v.subtag == UPLC_VLAM_INTERP) {
+                uplc_interp_closure* c = uplc_closure_of(v);
+                return uplc_rterm_delay(
+                    arena, uplcrt_readback_close(arena, c->body, c->env, 0));
             }
-            uplc_interp_closure* c = uplc_closure_of(v);
-            return uplc_rterm_delay(
-                arena, uplcrt_readback_close(arena, c->body, c->env, 0));
+            if (v.subtag == UPLC_VLAM_BYTECODE) {
+                return uplc_rterm_delay(
+                    arena, uplcrt_readback_bc_closure(arena, v, 0));
+            }
+            return uplc_rterm_delay(arena, uplc_rterm_error(arena));
         }
         case UPLC_V__COUNT:
             break;

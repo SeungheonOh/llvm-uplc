@@ -63,11 +63,13 @@ const std::unordered_set<std::string>& force_inline_targets() {
         "uplcrt_const_string_ref",
         "uplcrt_const_bool",
         "uplcrt_const_unit",
-        // Step / budget bookkeeping
-        "uplcrt_budget_step",
+        // Step / budget bookkeeping. uplcrt_budget_step is `static inline`
+        // in uplc/budget.h, so no external symbol exists to preserve.
         "uplcrt_budget_startup",
-        // Arena hot path
-        "uplc_arena_alloc",
+        // Arena slow path. `uplc_arena_alloc` is `static inline` in
+        // runtime/core/arena.h and already inlined by the per-TU compiler;
+        // only the slow path survives as an external symbol.
+        "uplc_arena_alloc_slow",
         "uplcrt_budget_arena",
         // Tag plumbing
         "uplc_make_con_raw",

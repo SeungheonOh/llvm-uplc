@@ -1,6 +1,6 @@
 #include "runtime/builtins/helpers.h"
-#include "runtime/cbor_data.h"
-#include "runtime/cek/rterm.h"
+#include "runtime/core/cbor_data.h"
+#include "runtime/core/rterm.h"
 
 #include <stdalign.h>
 #include <stdbool.h>

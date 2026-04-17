@@ -4,8 +4,8 @@
 // their own __cplusplus guards, so we include them unwrapped — wrapping
 // them in a second extern "C" block would drag gmp.h's libstdc++ bits
 // into C linkage and break libc++.
-#include "runtime/arena.h"
-#include "runtime/cek/rterm.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/rterm.h"
 
 #include "compiler/ast/term.h"
 

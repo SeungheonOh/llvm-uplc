@@ -1,8 +1,8 @@
 #include <stdint.h>
 
-#include "runtime/case_decompose.h"
-#include "runtime/errors.h"
-#include "runtime/value.h"
+#include "runtime/core/case_decompose.h"
+#include "runtime/core/errors.h"
+#include "runtime/core/value.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

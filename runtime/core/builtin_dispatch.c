@@ -1,9 +1,9 @@
-#include "runtime/builtin_dispatch.h"
+#include "runtime/core/builtin_dispatch.h"
 
 #include <stdint.h>
 
-#include "runtime/errors.h"
-#include "runtime/exmem.h"
+#include "runtime/core/errors.h"
+#include "runtime/core/exmem.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 #include "uplc/costmodel.h"

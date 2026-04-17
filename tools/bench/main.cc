@@ -36,12 +36,13 @@
 #include <string_view>
 #include <vector>
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "runtime/cek/cek.h"
 #include "runtime/compiled/entry.h"
-#include "runtime/errors.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
+#include "uplc/bytecode.h"
 
 #include "compiler/analysis/compile_plan.h"
 #include "compiler/ast/arena.h"
@@ -50,6 +51,7 @@
 #include "compiler/jit/codegen_pipeline.h"
 #include "compiler/jit/jit_runner.h"
 #include "compiler/lowering.h"
+#include "compiler_bc/lower_to_bc.h"
 
 namespace fs = std::filesystem;
 
@@ -89,7 +91,7 @@ constexpr const char* kUsage =
     "  --min-time   S    minimum seconds per script     (default 5.0)\n"
     "  --max-time   S    maximum seconds per script     (default 30.0)\n"
     "  --format     FMT  terminal | json | csv          (default terminal)\n"
-    "  --mode       M    compiled | cek                 (default compiled)\n"
+    "  --mode       M    compiled | cek | bc            (default compiled)\n"
     "  --filter     SUB  only scripts whose stem matches SUB\n"
     "  -o FILE           write output to FILE (default stdout)\n";
 
@@ -143,28 +145,101 @@ std::int64_t run_one_compiled(uplc_program_entry entry) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 }
 
-// One measured iteration of the CEK path: decode flat + run CEK.
-std::int64_t run_one_cek(const std::vector<std::uint8_t>& bytes) {
-    using clock = std::chrono::steady_clock;
-    auto t0 = clock::now();
+// Per-script preparation for CEK: decode flat + lower to rterm. Owns a
+// long-lived decode arena that holds the rterm tree across iterations.
+// Done ONCE per script; not part of the measurement.
+struct CekPrep {
+    uplc_arena* decode_arena = nullptr;
+    uplc_rterm* term         = nullptr;
 
-    uplc_arena* arena = uplc_arena_create();
-    uplc_budget budget;
-    uplcrt_budget_init(&budget, INT64_MAX, INT64_MAX);
-
-    try {
-        uplc::Arena ca;
-        uplc::Program db = uplc::decode_flat(ca, bytes.data(), bytes.size());
-        uplc_rprogram rp = uplc::lower_to_runtime(arena, db);
-        uplc_cek_result r = uplc_cek_run(arena, rp.term, &budget);
-        (void)r;
-    } catch (const std::exception&) {
-        uplc_arena_destroy(arena);
-        return -1;
+    ~CekPrep() { if (decode_arena) uplc_arena_destroy(decode_arena); }
+    CekPrep() = default;
+    CekPrep(const CekPrep&) = delete;
+    CekPrep& operator=(const CekPrep&) = delete;
+    CekPrep(CekPrep&& o) noexcept
+        : decode_arena(o.decode_arena), term(o.term) {
+        o.decode_arena = nullptr;
+        o.term         = nullptr;
     }
+};
 
-    uplc_arena_destroy(arena);
+CekPrep prepare_cek(const std::vector<std::uint8_t>& bytes) {
+    CekPrep p;
+    p.decode_arena = uplc_arena_create();
+    uplc::Arena ca;
+    uplc::Program db = uplc::decode_flat(ca, bytes.data(), bytes.size());
+    uplc_rprogram rp = uplc::lower_to_runtime(p.decode_arena, db);
+    p.term = rp.term;
+    return p;
+}
+
+// One measured iteration of the CEK path. ONLY times uplc_cek_run; the
+// flat decode and rterm lowering are already done in prep. A fresh
+// eval arena is created and destroyed per iteration so heap effects
+// match a real single-shot. Returns -1 if evaluation fails so the
+// harness flags the script as a failure instead of recording the
+// failure's (fast) fail-path time as a sample.
+std::int64_t run_one_cek(const CekPrep& prep) {
+    using clock = std::chrono::steady_clock;
+    uplc_arena* eval = uplc_arena_create();
+    uplc_budget budget;
+    uplcrt_budget_init_with_arena(&budget, INT64_MAX, INT64_MAX, eval);
+
+    auto t0 = clock::now();
+    uplc_cek_result r = uplc_cek_run(eval, prep.term, &budget);
     auto t1 = clock::now();
+    bool ok = r.ok != 0;
+
+    uplc_arena_destroy(eval);
+    if (!ok) return -1;
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+}
+
+// Per-script preparation for the bytecode VM: decode flat + lower
+// AST->rterm->bytecode. The ProgramOwner holds bc_fn arrays and the
+// constant pool alive; the rterm tree (referenced by body_rterm on
+// every lambda/delay fn) stays in decode_arena.
+struct BcPrep {
+    uplc_arena* decode_arena = nullptr;
+    std::unique_ptr<uplc_bc::ProgramOwner> owner;
+
+    ~BcPrep() { if (decode_arena) uplc_arena_destroy(decode_arena); }
+    BcPrep() = default;
+    BcPrep(const BcPrep&) = delete;
+    BcPrep& operator=(const BcPrep&) = delete;
+    BcPrep(BcPrep&& o) noexcept
+        : decode_arena(o.decode_arena), owner(std::move(o.owner)) {
+        o.decode_arena = nullptr;
+    }
+};
+
+BcPrep prepare_bc(const std::vector<std::uint8_t>& bytes) {
+    BcPrep p;
+    p.decode_arena = uplc_arena_create();
+    uplc::Arena ca;
+    uplc::Program db = uplc::decode_flat(ca, bytes.data(), bytes.size());
+    uplc_rprogram rp = uplc::lower_to_runtime(p.decode_arena, db);
+    p.owner = uplc_bc::lower_rprogram(p.decode_arena, rp);
+    return p;
+}
+
+// One measured iteration of the bytecode VM path. ONLY times
+// uplc_bc_run; flat decode, rterm lowering, and bytecode lowering are
+// all done in prep. Fresh eval arena per iteration, matching the CEK
+// harness.
+std::int64_t run_one_bc(const BcPrep& prep) {
+    using clock = std::chrono::steady_clock;
+    uplc_arena* eval = uplc_arena_create();
+    uplc_budget budget;
+    uplcrt_budget_init_with_arena(&budget, INT64_MAX, INT64_MAX, eval);
+
+    auto t0 = clock::now();
+    uplc_bc_result r = uplc_bc_run(eval, &prep.owner->prog, &budget);
+    auto t1 = clock::now();
+    bool ok = r.ok != 0;
+
+    uplc_arena_destroy(eval);
+    if (!ok) return -1;
     return std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 }
 
@@ -460,8 +535,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         std::fprintf(stderr, "uplcbench: --format must be terminal, json, or csv\n");
         return false;
     }
-    if (o.mode != "compiled" && o.mode != "cek") {
-        std::fprintf(stderr, "uplcbench: --mode must be 'compiled' or 'cek'\n");
+    if (o.mode != "compiled" && o.mode != "cek" && o.mode != "bc") {
+        std::fprintf(stderr, "uplcbench: --mode must be 'compiled', 'cek', or 'bc'\n");
         return false;
     }
     return true;
@@ -544,7 +619,10 @@ int main(int argc, char** argv) {
         os = &file_out;
     }
 
-    std::string vm_name = (opts.mode == "compiled") ? "llvm-uplc-jit" : "llvm-uplc-cek";
+    std::string vm_name;
+    if      (opts.mode == "compiled") vm_name = "llvm-uplc-jit";
+    else if (opts.mode == "bc")       vm_name = "llvm-uplc-bc";
+    else                              vm_name = "llvm-uplc-cek";
     bool stream_terminal = (opts.format == "terminal");
     TermLayout layout;
     layout.name_w = std::max<std::size_t>(name_width + 2, 16);
@@ -603,10 +681,31 @@ int main(int argc, char** argv) {
             if (!read_bytes(path, bytes)) {
                 s.name  = name;
                 s.error = "cannot read file";
+            } else if (opts.mode == "bc") {
+                // Prepare (flat decode + rterm lowering + bytecode
+                // lowering) OUTSIDE the timed region. run_one_bc times
+                // only uplc_bc_run.
+                try {
+                    BcPrep prep = prepare_bc(bytes);
+                    s = measure_loop(opts, name, [&prep]() {
+                        return run_one_bc(prep);
+                    });
+                } catch (const std::exception& e) {
+                    s.name  = name;
+                    s.error = std::string("bc prep: ") + e.what();
+                }
             } else {
-                s = measure_loop(opts, name, [&bytes]() {
-                    return run_one_cek(bytes);
-                });
+                // Prepare (flat decode + rterm lowering) OUTSIDE the
+                // timed region. run_one_cek times only uplc_cek_run.
+                try {
+                    CekPrep prep = prepare_cek(bytes);
+                    s = measure_loop(opts, name, [&prep]() {
+                        return run_one_cek(prep);
+                    });
+                } catch (const std::exception& e) {
+                    s.name  = name;
+                    s.error = std::string("cek prep: ") + e.what();
+                }
             }
         }
 

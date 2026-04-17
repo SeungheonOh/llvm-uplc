@@ -38,11 +38,15 @@ typedef struct uplc_value {
  *   INTERP   — payload is a uplc_interp_closure { rterm* body; env env }
  *              (CEK interpreter only, see runtime/cek/closure.h).
  *   COMPILED — payload is a uplc_closure { fn; free[] } (below).
+ *   BYTECODE — payload is a uplc_bc_closure { fn_id; n_upvals; upvals[] }
+ *              (bytecode VM, see runtime/bytecode/closure.h).
  *
- * The two closure shapes never mix: a V_LAM/V_DELAY produced by one mode
- * raises an evaluation failure if applied/forced by the other. */
+ * The three closure shapes never mix: a V_LAM/V_DELAY produced by one
+ * execution mode raises an evaluation failure if applied/forced by
+ * another. Checked on every apply/force. */
 #define UPLC_VLAM_INTERP   0u
 #define UPLC_VLAM_COMPILED 1u
+#define UPLC_VLAM_BYTECODE 2u
 
 /*
  * Subtag high-bit flag for V_CON values: when set, the payload is an
@@ -120,8 +124,12 @@ void        uplcrt_case_decompose_out(uplc_budget* b, uplc_value scrutinee,
                                      uint32_t n_branches, uint64_t* out_tag,
                                      uint32_t* out_n_fields, uplc_value** out_fields);
 
-void        uplcrt_budget_step   (uplc_budget* b, uplc_step_kind kind);
-void        uplcrt_budget_flush  (uplc_budget* b);
+/* uplcrt_budget_step is `static inline` in uplc/budget.h — it inlines
+ * directly at every call site. `uplcrt_budget_step_extern` is the
+ * out-of-line wrapper for consumers that need a real symbol address
+ * (JIT symbol registration, function-pointer tables). */
+void        uplcrt_budget_step_extern(uplc_budget* b, uplc_step_kind kind);
+void        uplcrt_budget_flush     (uplc_budget* b);
 
 #ifdef __GNUC__
 __attribute__((noreturn))

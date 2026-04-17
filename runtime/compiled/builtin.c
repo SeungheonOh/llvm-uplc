@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#include "runtime/builtin_state.h"
+#include "runtime/core/builtin_state.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 #include "uplc/term.h"

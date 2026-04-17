@@ -17,10 +17,10 @@
 #include <string>
 #include <string_view>
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "runtime/compiled/entry.h"
-#include "runtime/errors.h"
-#include "runtime/readback.h"
+#include "runtime/core/errors.h"
+#include "runtime/cek/readback.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 #include "uplc/version.h"

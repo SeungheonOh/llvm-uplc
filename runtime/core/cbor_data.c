@@ -1,4 +1,4 @@
-#include "runtime/cbor_data.h"
+#include "runtime/core/cbor_data.h"
 
 #include <stdalign.h>
 #include <stdint.h>
@@ -7,7 +7,7 @@
 
 #include <gmp.h>
 
-#include "runtime/errors.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 
 /*

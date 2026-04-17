@@ -4,8 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "runtime/arena.h"
-#include "runtime/errors.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

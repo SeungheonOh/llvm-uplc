@@ -1,5 +1,5 @@
 #include "runtime/builtins/helpers.h"
-#include "runtime/cek/rterm.h"
+#include "runtime/core/rterm.h"
 
 #include <stdalign.h>
 #include <stdint.h>

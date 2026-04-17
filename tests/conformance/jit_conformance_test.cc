@@ -34,9 +34,9 @@
 #include "compiler/jit/jit_runner.h"
 #include "compiler/lowering.h"
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "runtime/compiled/entry.h"
-#include "runtime/readback.h"
+#include "runtime/cek/readback.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

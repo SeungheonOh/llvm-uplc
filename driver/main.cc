@@ -33,11 +33,11 @@
 #include <llvm/Support/raw_ostream.h>
 
 // Runtime.
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "runtime/cek/cek.h"
 #include "runtime/compiled/entry.h"
-#include "runtime/errors.h"
-#include "runtime/readback.h"
+#include "runtime/core/errors.h"
+#include "runtime/cek/readback.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 #include "uplc/version.h"
@@ -290,7 +290,8 @@ int main(int argc, char** argv) {
         syms[jit->mangleAndIntern(#fn)] = llvm::orc::ExecutorSymbolDef( \
             llvm::orc::ExecutorAddr::fromPtr(fn), fl)
 
-        REG(uplcrt_budget_step);
+        /* uplcrt_budget_step is `static inline` in uplc/budget.h and
+         * emitted inline into the IR — no JIT registration needed. */
         REG(uplcrt_budget_startup);
         REG(uplcrt_budget_flush);
         REG(uplcrt_make_lam);

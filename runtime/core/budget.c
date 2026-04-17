@@ -102,13 +102,10 @@ void uplcrt_budget_flush(uplc_budget* b) {
     b->scratch[UPLC_STEP__COUNT] = 0;
 }
 
-/* Charge one machine step of the given kind. Defined as inlinable for the
- * interpreter hot path; compiler-emitted IR in M7 will inline this via the
- * same header. */
-void uplcrt_budget_step(uplc_budget* b, uplc_step_kind kind) {
-    unsigned k = (unsigned)kind;
-    ++b->scratch[k];
-    if (++b->scratch[UPLC_STEP__COUNT] >= UPLC_SLIPPAGE) {
-        uplcrt_budget_flush(b);
-    }
+/* Out-of-line wrapper for uplcrt_budget_step. The hot-path call site
+ * should resolve to the `static inline` version in uplc/budget.h; this
+ * exists only so the symbol `uplcrt_budget_step_extern` has a concrete
+ * address (JIT symbol lookup, function-pointer tables, debug tooling). */
+void uplcrt_budget_step_extern(uplc_budget* b, uplc_step_kind kind) {
+    uplcrt_budget_step(b, kind);
 }

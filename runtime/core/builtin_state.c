@@ -1,12 +1,12 @@
-#include "runtime/builtin_state.h"
+#include "runtime/core/builtin_state.h"
 
 #include <stdalign.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
-#include "runtime/builtin_dispatch.h"
-#include "runtime/errors.h"
+#include "runtime/core/builtin_dispatch.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 
@@ -21,11 +21,12 @@
  */
 
 static uplc_value wrap(uplc_builtin_state* s) {
-    uplc_value v;
-    v.tag    = UPLC_V_BUILTIN;
-    v.subtag = 0;
-    for (int i = 0; i < 6; ++i) v._pad[i] = 0;
-    v.payload = (uint64_t)(uintptr_t)s;
+    uplc_value v = {
+        .tag     = UPLC_V_BUILTIN,
+        .subtag  = 0,
+        ._pad    = {0},
+        .payload = (uint64_t)(uintptr_t)s,
+    };
     return v;
 }
 

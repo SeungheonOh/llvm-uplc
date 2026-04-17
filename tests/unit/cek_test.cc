@@ -20,12 +20,12 @@
 #include "compiler/frontend/parser.h"
 #include "compiler/lowering.h"
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "runtime/cek/cek.h"
 #include "runtime/cek/closure.h"
 #include "runtime/cek/env.h"
-#include "runtime/cek/rterm.h"
-#include "runtime/value.h"
+#include "runtime/core/rterm.h"
+#include "runtime/core/value.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

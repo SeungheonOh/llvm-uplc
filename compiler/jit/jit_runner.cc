@@ -27,14 +27,14 @@
 /* Internal runtime headers — needed so REG() can take the address of
  * helpers that aren't part of the stable uplc/abi.h surface. */
 #include "compiler/ast/builtin_tag.h"
-#include "runtime/arena.h"
-#include "runtime/builtin_dispatch.h"
-#include "runtime/builtin_state.h"
-#include "runtime/case_decompose.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/builtin_dispatch.h"
+#include "runtime/core/builtin_state.h"
+#include "runtime/core/case_decompose.h"
 #include "runtime/compiled/closure.h"
-#include "runtime/errors.h"
-#include "runtime/exmem.h"
-#include "runtime/value.h"
+#include "runtime/core/errors.h"
+#include "runtime/core/exmem.h"
+#include "runtime/core/value.h"
 #include "uplc/budget.h"
 
 /* Runtime tables defined in C, declared here for C++ linkage so we can
@@ -169,8 +169,9 @@ void JitRunner::register_runtime_symbols() {
     syms[jit_->mangleAndIntern(#fn)] = llvm::orc::ExecutorSymbolDef( \
         llvm::orc::ExecutorAddr::fromPtr(fn), fl)
 
-    /* Direct ABI surface — what generated IR calls. */
-    REG(uplcrt_budget_step);
+    /* Direct ABI surface — what generated IR calls. Note:
+     * `uplcrt_budget_step` is `static inline` in uplc/budget.h and
+     * emitted inline by codegen, so it needs no JIT registration. */
     REG(uplcrt_budget_startup);
     REG(uplcrt_budget_flush);
     REG(uplcrt_make_lam);
@@ -240,7 +241,11 @@ void JitRunner::register_runtime_symbols() {
     REG(uplcrt_fail_install);
     REG(uplc_arena_create);
     REG(uplc_arena_destroy);
-    REG(uplc_arena_alloc);
+    /* uplc_arena_alloc is `static inline` in runtime/core/arena.h — the
+     * fast path is emitted inline at every call site. Slow path lives in
+     * the bitcode bundle as uplc_arena_alloc_slow and needs no external
+     * symbol registration. */
+    REG(uplc_arena_alloc_slow);
     REG(uplc_arena_alloc_mpz);
     REG(uplc_arena_dup);
     REG(uplc_arena_intern_str);

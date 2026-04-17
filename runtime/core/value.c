@@ -1,6 +1,6 @@
-#include "runtime/value.h"
+#include "runtime/core/value.h"
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "uplc/abi.h"
 
 #include <stdalign.h>

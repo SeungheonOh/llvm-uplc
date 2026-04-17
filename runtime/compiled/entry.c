@@ -3,7 +3,7 @@
 #include <setjmp.h>
 #include <string.h>
 
-#include "runtime/errors.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

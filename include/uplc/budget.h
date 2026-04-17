@@ -83,6 +83,32 @@ int  uplcrt_budget_ok(const uplc_budget* b);
  * budget. Called exactly once per evaluation by the entry points. */
 void uplcrt_budget_startup(uplc_budget* b);
 
+/* Apply the per-kind scratch counters to (cpu, mem) via saturating
+ * subtraction, then zero the scratch. Extern because it's cold — callers
+ * hit it only once per UPLC_SLIPPAGE opcodes (see uplcrt_budget_step). */
+void uplcrt_budget_flush(uplc_budget* b);
+
+/* Charge one CEK step against the budget. `static inline` because this is
+ * on the hot path — the bytecode VM dispatch loop and JIT-emitted IR both
+ * hit it on every opcode. Keeping the body in the header lets every TU
+ * inline it directly without -flto. The slow path (flush) stays extern.
+ *
+ * Callers that need a function pointer (e.g. an ABI-stable export for
+ * JIT-time dynamic symbol lookup) can take `&uplcrt_budget_step_extern`
+ * instead — it is an out-of-line wrapper with identical behaviour. */
+static inline void uplcrt_budget_step(uplc_budget* b, uplc_step_kind kind) {
+    unsigned k = (unsigned)kind;
+    ++b->scratch[k];
+    if (++b->scratch[UPLC_STEP__COUNT] >= UPLC_SLIPPAGE) {
+        uplcrt_budget_flush(b);
+    }
+}
+
+/* Out-of-line wrapper with ABI-stable address. Never called on the hot
+ * path; exists solely so that symbol lookups against libuplcrt resolve
+ * something concrete. */
+void uplcrt_budget_step_extern(uplc_budget* b, uplc_step_kind kind);
+
 #ifdef __cplusplus
 }
 #endif

@@ -6,8 +6,8 @@
 
 #include <gmp.h>
 
-#include "runtime/arena.h"
-#include "runtime/value.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/value.h"
 #include "uplc/abi.h"
 #include "uplc/term.h"
 

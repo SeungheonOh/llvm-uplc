@@ -1,8 +1,8 @@
 #ifndef UPLCRT_READBACK_H
 #define UPLCRT_READBACK_H
 
-#include "runtime/arena.h"
-#include "runtime/cek/rterm.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/rterm.h"
 #include "uplc/abi.h"
 
 #ifdef __cplusplus
@@ -37,6 +37,14 @@ struct uplc_env_cell;
 uplc_rterm* uplcrt_readback_close(uplc_arena* arena, uplc_rterm* body,
                                   struct uplc_env_cell* env,
                                   uint32_t initial_depth);
+
+/* Bytecode-VM closure readback (subtag UPLC_VLAM_BYTECODE). Expects `v`
+ * to be V_LAM or V_DELAY; uses the original rterm body stored on the
+ * closure's uplc_bc_fn plus the upval values to substitute free vars.
+ * `initial_depth` = 1 for lambda (the caller wraps in uplc_rterm_lambda),
+ * 0 for delay. */
+uplc_rterm* uplcrt_readback_bc_closure(uplc_arena* arena, uplc_value v,
+                                       uint32_t initial_depth);
 
 #ifdef __cplusplus
 }

@@ -5,14 +5,14 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "runtime/builtin_dispatch.h"
-#include "runtime/builtin_state.h"
-#include "runtime/case_decompose.h"
+#include "runtime/core/builtin_dispatch.h"
+#include "runtime/core/builtin_state.h"
+#include "runtime/core/case_decompose.h"
 #include "runtime/cek/closure.h"
 #include "runtime/cek/env.h"
 #include "runtime/cek/stack.h"
-#include "runtime/errors.h"
-#include "runtime/value.h"
+#include "runtime/core/errors.h"
+#include "runtime/core/value.h"
 
 /* VBuiltin state is shared with the compiled path — defined in
  * runtime/builtin_state.{h,c}. The CEK loop only sees the opaque

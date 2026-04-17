@@ -1,4 +1,4 @@
-#include "runtime/builtin_dispatch.h"
+#include "runtime/core/builtin_dispatch.h"
 #include "uplc/abi.h"
 #include "uplc/costmodel.h"
 #include "uplc/term.h"

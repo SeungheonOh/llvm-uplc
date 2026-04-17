@@ -1,4 +1,4 @@
-#include "runtime/case_decompose.h"
+#include "runtime/core/case_decompose.h"
 
 #include <stdalign.h>
 #include <stdint.h>
@@ -6,9 +6,9 @@
 
 #include <gmp.h>
 
-#include "runtime/cek/rterm.h"    /* shared uplc_rconstant layout */
-#include "runtime/errors.h"
-#include "runtime/value.h"
+#include "runtime/core/rterm.h"    /* shared uplc_rconstant layout */
+#include "runtime/core/errors.h"
+#include "runtime/core/value.h"
 
 /*
  * Decompose a case scrutinee. Matches TS constantToConstr exactly:

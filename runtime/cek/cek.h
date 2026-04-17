@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#include "runtime/arena.h"
-#include "runtime/cek/rterm.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/rterm.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

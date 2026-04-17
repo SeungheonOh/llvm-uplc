@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "runtime/arena.h"
-#include "runtime/cek/rterm.h"   /* uplc_rdata — the shared Data layout */
+#include "runtime/core/arena.h"
+#include "runtime/core/rterm.h"   /* uplc_rdata — the shared Data layout */
 
 #ifdef __cplusplus
 extern "C" {

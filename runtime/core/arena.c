@@ -1,4 +1,4 @@
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -8,6 +8,11 @@
  * Pure-C bump arena. Chunks are allocated on demand (64 KB default).
  * BigInts registered via uplc_arena_alloc_mpz are mpz_clear'd when the
  * arena is destroyed. Mirrors the compiler-side C++ arena.
+ *
+ * The hot-path fast allocation lives in runtime/core/arena.h as an inline
+ * function so every TU that includes the header gets the bump-and-check
+ * compiled directly into the call site. This TU provides the slow-path
+ * chunk-install logic, plus the destructor and the non-hot helpers.
  */
 
 #define UPLC_ARENA_CHUNK_BYTES (64u * 1024u)
@@ -24,12 +29,6 @@ typedef struct uplc_arena_mpz_slot {
     struct uplc_arena_mpz_slot*   next;
 } uplc_arena_mpz_slot;
 
-struct uplc_arena {
-    uplc_arena_chunk*    chunks;   /* singly linked, head = most recent */
-    uplc_arena_mpz_slot* mpzs;     /* singly linked, for mpz_clear on destroy */
-    size_t               total_allocated;
-};
-
 static uplc_arena_chunk* uplc_arena_new_chunk(size_t at_least) {
     size_t bytes = UPLC_ARENA_CHUNK_BYTES;
     if (at_least > bytes) bytes = at_least;
@@ -43,6 +42,22 @@ static uplc_arena_chunk* uplc_arena_new_chunk(size_t at_least) {
     return c;
 }
 
+/* Promote a chunk to be the current one for fast-path bump allocation.
+ * The chunk's own cursor is what the header's inline reads via a->cur /
+ * a->end; we therefore sync the arena's cursor pair to the chunk's. */
+static void uplc_arena_install_chunk(uplc_arena* a, uplc_arena_chunk* c) {
+    /* Persist the bump cursor of whatever was current back into its chunk
+     * so we can resume from it later (not strictly needed today — we
+     * never revisit old chunks — but leaves the door open). */
+    if (a->_chunks) {
+        a->_chunks->cur = a->cur;
+    }
+    c->next = a->_chunks;
+    a->_chunks = c;
+    a->cur = c->cur;
+    a->end = c->end;
+}
+
 uplc_arena* uplc_arena_create(void) {
     uplc_arena* a = (uplc_arena*)calloc(1, sizeof(uplc_arena));
     return a;
@@ -51,17 +66,15 @@ uplc_arena* uplc_arena_create(void) {
 void uplc_arena_destroy(uplc_arena* a) {
     if (!a) return;
 
-    uplc_arena_mpz_slot* slot = a->mpzs;
+    uplc_arena_mpz_slot* slot = a->_mpzs;
     while (slot) {
         mpz_clear(slot->value);
-        uplc_arena_mpz_slot* next = slot->next;
-        /* slot->value and slot itself both live inside the arena, so we
-         * don't free them individually — freeing the chunks releases them. */
-        (void)next;
-        slot = next;
+        /* slot and slot->value both live inside the arena, so freeing
+         * the chunks below releases them. */
+        slot = slot->next;
     }
 
-    uplc_arena_chunk* c = a->chunks;
+    uplc_arena_chunk* c = a->_chunks;
     while (c) {
         uplc_arena_chunk* next = c->next;
         free(c);
@@ -70,31 +83,29 @@ void uplc_arena_destroy(uplc_arena* a) {
     free(a);
 }
 
-void* uplc_arena_alloc(uplc_arena* a, size_t bytes, size_t align) {
+void* uplc_arena_alloc_slow(uplc_arena* a, size_t bytes, size_t align) {
     if (!a || bytes == 0) return NULL;
 
     for (;;) {
-        if (!a->chunks) {
+        if (!a->_chunks) {
             uplc_arena_chunk* c = uplc_arena_new_chunk(bytes + align);
             if (!c) return NULL;
-            c->next = a->chunks;
-            a->chunks = c;
+            uplc_arena_install_chunk(a, c);
         }
 
-        uplc_arena_chunk* c = a->chunks;
-        uintptr_t cur = (uintptr_t)c->cur;
+        uintptr_t cur     = (uintptr_t)a->cur;
         uintptr_t aligned = (cur + (align - 1)) & ~((uintptr_t)align - 1);
-        if ((uint8_t*)aligned + bytes <= c->end) {
-            c->cur = (uint8_t*)aligned + bytes;
-            a->total_allocated += bytes;
+        uint8_t*  next    = (uint8_t*)aligned + bytes;
+        if (next <= a->end) {
+            a->cur = next;
+            a->_total_allocated += bytes;
             return (void*)aligned;
         }
 
         /* Current chunk is full — allocate a fresh one and retry. */
         uplc_arena_chunk* nc = uplc_arena_new_chunk(bytes + align);
         if (!nc) return NULL;
-        nc->next = a->chunks;
-        a->chunks = nc;
+        uplc_arena_install_chunk(a, nc);
     }
 }
 
@@ -125,11 +136,11 @@ mpz_ptr uplc_arena_alloc_mpz(uplc_arena* a) {
         a, sizeof(uplc_arena_mpz_slot), _Alignof(uplc_arena_mpz_slot));
     if (!slot) return NULL;
     slot->value = v;
-    slot->next  = a->mpzs;
-    a->mpzs     = slot;
+    slot->next  = a->_mpzs;
+    a->_mpzs    = slot;
     return v;
 }
 
 size_t uplc_arena_bytes_allocated(const uplc_arena* a) {
-    return a ? a->total_allocated : 0;
+    return a ? a->_total_allocated : 0;
 }

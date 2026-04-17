@@ -1,8 +1,8 @@
 #include <stdint.h>
 
-#include "runtime/arena.h"
-#include "runtime/errors.h"
-#include "runtime/value.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/errors.h"
+#include "runtime/core/value.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

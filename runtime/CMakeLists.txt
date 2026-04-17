@@ -1,31 +1,70 @@
-# libuplcrt — the pure-C runtime linked into both uplcr and every .uplcx.
+# libuplcrt — the pure-C runtime.
+#
+# Structure:
+#
+#   Four OBJECT libraries group the source files by role:
+#
+#     uplcrt_core      — arena, value, budget, cost model, Data/CBOR, error
+#                        plumbing, builtin dispatch table. No execution
+#                        model. No crypto.
+#     uplcrt_builtins  — all 101 Plutus builtins + crypto link deps
+#                        (libsodium / OpenSSL / libsecp256k1 / BLST).
+#     uplcrt_compiled  — JIT-side helpers (apply/force/case/constr/closure/
+#                        entry) called by LLVM-emitted IR.
+#     uplcrt_cek       — the tree-walking CEK interpreter. Scheduled for
+#                        retirement in M-bc-9 once the bytecode VM
+#                        (plan-bc.md) reaches parity.
+#
+#   A STATIC library `uplcrt` merges all four OBJECT libs into a single
+#   archive. This archive is force-loaded by every existing consumer
+#   (uplcc, uplcr, uplcrunner, tests, tools/bench) so their link lines
+#   don't change — and `$<TARGET_FILE:uplcrt>` remains a real path that
+#   `uplcc emit-exe` can embed in the generated build_paths.h.
+#
+#   Downstream consumers that need a narrower slice (e.g. the future
+#   `uplci` bytecode binary in plan-bc.md) compose their own STATIC
+#   archive from the OBJECT libs directly, or link against them as
+#   TARGET_OBJECTS.
+#
+#   PUBLIC link-library propagation on OBJECT libs (CMake ≥ 3.12) carries
+#   crypto, GMP, and header deps through to whichever merge archive the
+#   consumer chooses.
 
-# Sources are split into two groups:
-#
-#   UPLCRT_SHARED_SOURCES
-#       Pieces used by both execution modes — direct CEK interpretation and
-#       the (later) LLVM-compiled entry path. Stays directly in runtime/.
-#
-#   UPLCRT_CEK_SOURCES
-#       CEK-interpreter-specific state and control flow. Lives in
-#       runtime/cek/ so it is obvious which files go away (or are
-#       re-purposed) for compiled execution.
-set(UPLCRT_SHARED_SOURCES
-    version.c
-    builtin_table.c
-    arena.c
-    value.c
-    budget.c
-    errors.c
-    costmodel.c
-    exmem.c
-    builtin_state.c
-    builtin_dispatch.c
-    cbor_data.c
-    readback.c
-    case_decompose.c
+# ---------------------------------------------------------------------------
+# 1. Core
+# ---------------------------------------------------------------------------
+set(UPLCRT_CORE_SOURCES
+    core/version.c
+    core/arena.c
+    core/value.c
+    core/budget.c
+    core/errors.c
+    core/costmodel.c
+    core/exmem.c
+    core/builtin_state.c
+    core/builtin_dispatch.c
+    core/builtin_table.c
+    core/cbor_data.c
+    core/case_decompose.c
+    core/rterm.c
 )
 
+add_library(uplcrt_core OBJECT ${UPLCRT_CORE_SOURCES})
+add_library(uplc::runtime_core ALIAS uplcrt_core)
+
+target_link_libraries(uplcrt_core
+    PUBLIC  uplc::headers GMP::GMP
+    PRIVATE uplc::compile_options
+)
+target_include_directories(uplcrt_core PUBLIC ${PROJECT_SOURCE_DIR})
+set_target_properties(uplcrt_core PROPERTIES
+    C_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+)
+
+# ---------------------------------------------------------------------------
+# 2. Builtins (crypto live here)
+# ---------------------------------------------------------------------------
 set(UPLCRT_BUILTIN_SOURCES
     builtins/helpers.c
     builtins/arith.c
@@ -45,14 +84,43 @@ set(UPLCRT_BUILTIN_SOURCES
     builtins/value.c
 )
 
-set(UPLCRT_CEK_SOURCES
-    cek/rterm.c
-    cek/env.c
-    cek/closure.c
-    cek/stack.c
-    cek/cek.c
+add_library(uplcrt_builtins OBJECT ${UPLCRT_BUILTIN_SOURCES})
+add_library(uplc::runtime_builtins ALIAS uplcrt_builtins)
+
+target_link_libraries(uplcrt_builtins
+    PUBLIC  uplcrt_core
+    PRIVATE uplc::compile_options
+)
+set_target_properties(uplcrt_builtins PROPERTIES
+    C_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
 )
 
+# Crypto libraries. PUBLIC because OBJECT libraries have no link step —
+# consumers of the merge archive (or of this OBJECT lib directly) are the
+# ones that actually link against sodium/openssl/secp256k1/blst. The PUBLIC
+# keyword makes CMake propagate the link deps through.
+if(SODIUM_FOUND)
+    target_link_libraries(uplcrt_builtins PUBLIC PkgConfig::SODIUM)
+    target_compile_definitions(uplcrt_builtins PRIVATE UPLCRT_HAVE_SODIUM=1)
+endif()
+
+if(OpenSSL_FOUND OR OPENSSL_FOUND)
+    target_link_libraries(uplcrt_builtins PUBLIC OpenSSL::Crypto)
+    target_compile_definitions(uplcrt_builtins PRIVATE UPLCRT_HAVE_OPENSSL=1)
+endif()
+
+if(SECP256K1_FOUND)
+    target_link_libraries(uplcrt_builtins PUBLIC PkgConfig::SECP256K1)
+    target_compile_definitions(uplcrt_builtins PRIVATE UPLCRT_HAVE_SECP256K1=1)
+endif()
+
+target_link_libraries(uplcrt_builtins PUBLIC blst)
+target_compile_definitions(uplcrt_builtins PRIVATE UPLCRT_HAVE_BLST=1)
+
+# ---------------------------------------------------------------------------
+# 3. Compiled-mode helpers (JIT path)
+# ---------------------------------------------------------------------------
 set(UPLCRT_COMPILED_SOURCES
     compiled/closure.c
     compiled/apply.c
@@ -65,54 +133,98 @@ set(UPLCRT_COMPILED_SOURCES
     compiled/entry.c
 )
 
-set(UPLCRT_SOURCES
-    ${UPLCRT_SHARED_SOURCES}
-    ${UPLCRT_BUILTIN_SOURCES}
-    ${UPLCRT_CEK_SOURCES}
-    ${UPLCRT_COMPILED_SOURCES}
-)
+add_library(uplcrt_compiled OBJECT ${UPLCRT_COMPILED_SOURCES})
+add_library(uplc::runtime_compiled ALIAS uplcrt_compiled)
 
-add_library(uplcrt STATIC ${UPLCRT_SOURCES})
-add_library(uplc::runtime ALIAS uplcrt)
-
-target_link_libraries(uplcrt
-    PUBLIC  uplc::headers
+target_link_libraries(uplcrt_compiled
+    PUBLIC  uplcrt_builtins
     PRIVATE uplc::compile_options
 )
-
-# Allow runtime .c files to use root-rooted includes like
-# "runtime/cek/cek.h" or "runtime/value.h".
-target_include_directories(uplcrt PRIVATE ${PROJECT_SOURCE_DIR})
-
-set_target_properties(uplcrt PROPERTIES
+set_target_properties(uplcrt_compiled PROPERTIES
     C_STANDARD 17
     POSITION_INDEPENDENT_CODE ON
 )
 
-# GMP is linked transitively by any consumer of the runtime (compiler, driver,
-# .uplcx). The runtime itself doesn't yet reference GMP symbols in M0, but we
-# wire the dependency now so downstream targets don't have to repeat it.
-target_link_libraries(uplcrt PUBLIC GMP::GMP)
+# ---------------------------------------------------------------------------
+# 4. Tree-walking CEK interpreter (scheduled for retirement in M-bc-9)
+# ---------------------------------------------------------------------------
+set(UPLCRT_CEK_SOURCES
+    cek/env.c
+    cek/closure.c
+    cek/stack.c
+    cek/cek.c
+    cek/readback.c
+)
 
-# Crypto libraries — libsodium (sha2/blake2b/ed25519) + OpenSSL (sha3/keccak/ripemd).
-if(SODIUM_FOUND)
-    target_link_libraries(uplcrt PRIVATE PkgConfig::SODIUM)
-    target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_SODIUM=1)
-endif()
+add_library(uplcrt_cek OBJECT ${UPLCRT_CEK_SOURCES})
+add_library(uplc::runtime_cek ALIAS uplcrt_cek)
 
-if(OpenSSL_FOUND OR OPENSSL_FOUND)
-    target_link_libraries(uplcrt PRIVATE OpenSSL::Crypto)
-    target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_OPENSSL=1)
-endif()
+target_link_libraries(uplcrt_cek
+    PUBLIC  uplcrt_builtins
+    PRIVATE uplc::compile_options
+)
+set_target_properties(uplcrt_cek PROPERTIES
+    C_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+)
 
-if(SECP256K1_FOUND)
-    target_link_libraries(uplcrt PRIVATE PkgConfig::SECP256K1)
-    target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_SECP256K1=1)
-endif()
+# ---------------------------------------------------------------------------
+# 4.5. Bytecode VM (plan-bc.md — the uplci interpreter path)
+#
+# Lives behind a separate OBJECT library so the future `uplci` binary can
+# link it without pulling in uplcrt_compiled (JIT helpers) or uplcrt_cek
+# (tree-walker). No LLVM dependency.
+# ---------------------------------------------------------------------------
+set(UPLCRT_BC_SOURCES
+    bytecode/vm.c
+    bytecode/closure.c
+    bytecode/ops_control.c
+    bytecode/ops_abstraction.c
+    bytecode/ops_apply.c
+    bytecode/ops_force.c
+    bytecode/ops_constr.c
+    bytecode/ops_case.c
+)
 
-# BLST — always available (vendored).
-target_link_libraries(uplcrt PRIVATE blst)
-target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_BLST=1)
+add_library(uplcrt_bc OBJECT ${UPLCRT_BC_SOURCES})
+add_library(uplc::runtime_bc ALIAS uplcrt_bc)
+
+target_link_libraries(uplcrt_bc
+    PUBLIC  uplcrt_builtins
+    PRIVATE uplc::compile_options
+)
+set_target_properties(uplcrt_bc PROPERTIES
+    C_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+)
+
+# The dispatch macro uses `[[clang::musttail]]` — a C23 attribute syntax
+# clang accepts in C17 as an extension. Silence the diagnostic for this
+# lib only; it's load-bearing for tail-call threaded dispatch.
+target_compile_options(uplcrt_bc PRIVATE -Wno-c23-extensions)
+
+# ---------------------------------------------------------------------------
+# 5. Merge STATIC archive — what every existing consumer force-loads
+# ---------------------------------------------------------------------------
+add_library(uplcrt STATIC
+    $<TARGET_OBJECTS:uplcrt_core>
+    $<TARGET_OBJECTS:uplcrt_builtins>
+    $<TARGET_OBJECTS:uplcrt_compiled>
+    $<TARGET_OBJECTS:uplcrt_cek>
+)
+add_library(uplc::runtime ALIAS uplcrt)
+
+target_link_libraries(uplcrt
+    PUBLIC
+        uplcrt_core
+        uplcrt_builtins
+        uplcrt_compiled
+        uplcrt_cek
+)
+set_target_properties(uplcrt PROPERTIES
+    C_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+)
 
 # Note: the runner subdirectory is added from the top-level CMakeLists
 # AFTER compiler/, because the runner depends on uplc::frontend.
@@ -130,10 +242,11 @@ target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_BLST=1)
 # We deliberately exclude:
 #   - builtins/*  (they're tag-dispatched function pointers — never inline)
 #   - cek/*       (the CEK interpreter is a separate execution mode)
-#   - exmem.c, costmodel.c, builtin_dispatch.c, builtin_table.c
+#   - core/exmem.c, core/costmodel.c, core/builtin_dispatch.c,
+#     core/builtin_table.c
 #                 (they reach into the per-builtin cost model and pull
 #                  in the entire builtin tag space; not on the JIT hot path)
-#   - readback.c, cbor_data.c (output-side, not steady-state)
+#   - core/readback.c, core/cbor_data.c (output-side, not steady-state)
 #
 # What remains is the core compiled-mode helpers + their immediate
 # dependencies — small enough to inline aggressively, large enough to
@@ -141,16 +254,16 @@ target_compile_definitions(uplcrt PRIVATE UPLCRT_HAVE_BLST=1)
 # ---------------------------------------------------------------------------
 
 set(UPLCRT_BITCODE_SOURCES
-    arena.c
-    value.c
-    budget.c
-    errors.c
-    builtin_state.c
-    builtin_dispatch.c     # uplcrt_run_builtin — exposes the dispatch chain
-    builtin_table.c        # UPLC_BUILTIN_META[] — the const table the inliner needs
-    costmodel.c            # cost-shape eval, folds when the shape is known
-    exmem.c                # arg-size dispatch, switch on tag
-    case_decompose.c
+    core/arena.c
+    core/value.c
+    core/budget.c
+    core/errors.c
+    core/builtin_state.c
+    core/builtin_dispatch.c     # uplcrt_run_builtin — exposes the dispatch chain
+    core/builtin_table.c        # UPLC_BUILTIN_META[] — the const table the inliner needs
+    core/costmodel.c            # cost-shape eval, folds when the shape is known
+    core/exmem.c                # arg-size dispatch, switch on tag
+    core/case_decompose.c
     compiled/closure.c
     compiled/apply.c
     compiled/force.c

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "runtime/arena.h"
+#include "runtime/core/arena.h"
 #include "uplc/abi.h"
 
 #ifdef __cplusplus

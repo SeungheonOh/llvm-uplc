@@ -6,10 +6,10 @@
 
 #include <gmp.h>
 
-#include "runtime/arena.h"
-#include "runtime/cek/rterm.h"   /* shared uplc_rconstant layout */
-#include "runtime/errors.h"
-#include "runtime/value.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/rterm.h"   /* shared uplc_rconstant layout */
+#include "runtime/core/errors.h"
+#include "runtime/core/value.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 

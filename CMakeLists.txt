@@ -173,6 +173,7 @@ message(STATUS "llvm-uplc: static libsecp256k1  = ${UPLC_SECP256K1_STATIC}")
 add_subdirectory(include)
 add_subdirectory(runtime)
 add_subdirectory(compiler)
+add_subdirectory(compiler_bc)
 # The static-runner stub depends on uplc::frontend (added by compiler/),
 # so it must come after the compiler subdirectory.
 add_subdirectory(runtime/runner)

@@ -1,11 +1,11 @@
-#include "runtime/exmem.h"
+#include "runtime/core/exmem.h"
 
 #include <stdint.h>
 
 #include <gmp.h>
 
-#include "runtime/cek/rterm.h"  /* uplc_rconstant, uplc_rdata (shared types) */
-#include "runtime/value.h"
+#include "runtime/core/rterm.h"  /* uplc_rconstant, uplc_rdata (shared types) */
+#include "runtime/core/value.h"
 
 /*
  * ExMem primitives and per-builtin size extraction. M3a covers the

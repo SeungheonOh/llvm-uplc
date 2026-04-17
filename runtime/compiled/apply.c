@@ -1,9 +1,9 @@
 #include <stdint.h>
 
-#include "runtime/arena.h"
-#include "runtime/builtin_state.h"
+#include "runtime/core/arena.h"
+#include "runtime/core/builtin_state.h"
 #include "runtime/compiled/closure.h"
-#include "runtime/errors.h"
+#include "runtime/core/errors.h"
 #include "uplc/abi.h"
 #include "uplc/budget.h"
 
